@@ -1,0 +1,4 @@
+node_modules/
+backups/registry_backup_*.reg
+.DS_Store
+Thumbs.db

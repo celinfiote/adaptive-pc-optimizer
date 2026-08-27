@@ -1,0 +1,27 @@
+{
+  "name": "adaptive-pc-optimizer",
+  "version": "1.0.0",
+  "description": "Universal, Adaptive Windows Performance & Latency Optimizer for Gamers and Multi-Agent Game Developers",
+  "main": "index.js",
+  "bin": {
+    "adaptive-tweak": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "optimize": "node index.js --apply",
+    "restore": "node index.js --restore",
+    "status": "node index.js --status"
+  },
+  "keywords": [
+    "windows-optimizer",
+    "tweaks",
+    "low-latency",
+    "gaming-performance",
+    "game-developer",
+    "adaptive-tuning",
+    "hags",
+    "raw-input"
+  ],
+  "author": "celinfiote",
+  "license": "MIT"
+}
