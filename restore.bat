@@ -2,11 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
-:: Check for Administrator privileges
-net session >nul 2>&1
-if %errorlevel% == 0 (
-    node index.js --restore
-) else (
-    echo [INFO] Solicitando privilegios de Administrador para restaurar configuracoes...
-    powershell -Command "Start-Process cmd -ArgumentList '/c cd /d \"%~dp0\" && node index.js --restore && pause' -Verb RunAs"
-)
+:: Chama o .exe (nao "node index.js" direto) para funcionar mesmo sem Node.js instalado -
+:: o .exe ja escolhe sozinho entre a implementacao Node (se disponivel) e o motor nativo em
+:: C#, e ja cuida da propria elevacao de Administrador (UAC), sem precisar da checagem
+:: "net session" + Start-Process -Verb RunAs que este script fazia antes.
+AdaptivePCOptimizer.exe --restore
