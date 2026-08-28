@@ -3,6 +3,14 @@
 > **Software Universal e Adaptativo para Windows 10 & 11 (.EXE Standalone)**  
 > Otimizador de Desempenho, Baixa Latência e **Central Pós-Formatação de Drivers Oficiais**.  
 > Criado para **Gamers Competitivos**, **Desenvolvedores de Jogos (Godot/Unity/Unreal)** e **Workloads Multi-Agentes de IA (Orca/Antigravity)**.
+>
+> ⚠️ **Correção importante (28/08/2026)**: versões anteriores do `.exe` dependiam
+> silenciosamente do Node.js estar instalado na máquina — numa máquina sem Node (o caso comum,
+> já que é uma ferramenta de desenvolvedor, não algo que jogadores têm por padrão), a opção
+> [1] caía num fallback quebrado que só tentava 1 comando de `winget` e travava aí, sem
+> aplicar nenhum ajuste real e sem avisar o usuário disso. **Agora o `.exe` tem um motor
+> nativo completo em C#** que aplica exatamente os mesmos ajustes sem depender de Node.js
+> nem de `winget` — o programa é standalone de verdade agora, como o nome sempre prometeu.
 
 ---
 
@@ -39,8 +47,11 @@ Acabou de formatar o computador? Essa opção detecta o hardware do computador e
 2. **Microsoft Visual C++ Redistributable All-in-One**: Instala silenciosamente todas as bibliotecas C++ de 2015 a 2022 (x86 e x64).
 3. **DirectX End-User Runtime**: Atualiza todas as bibliotecas legadas e modernas do DirectX 9, 10, 11 e 12.
 4. **Microsoft .NET Desktop Runtime 8**: Runtimes necessários para ferramentas de desenvolvimento e jogos modernos.
-5. **Driver Oficial de GPU**: Detecta se a placa é **NVIDIA**, **AMD** ou **Intel Arc** e baixa o software oficial do fabricante (*GeForce Experience / PhysX / AMD Adrenalin / Intel Graphics*).
-6. **Utilitários Essenciais de Dev**: Instala 7-Zip, Git e Node.js LTS via instaladores oficiais homologados.
+5. **Driver Oficial de GPU**: Detecta se a placa é **NVIDIA**, **AMD** ou **Intel** e abre a página oficial de download/detecção do fabricante certo no navegador — a instalação de driver de GPU é sempre feita manualmente pelo usuário na página oficial, nunca às cegas por script (cada fabricante exige aceitar termos próprios e não existe link de download silencioso oficial e estável).
+6. **Drivers de Chipset/Áudio/Rede**: Abre a tela de Atualizações Opcionais do próprio Windows (via Windows Update, o canal oficial do sistema).
+7. **Node.js LTS**: Instalado via `winget` quando disponível — desbloqueia a versão completa (Node.js) do optimizer nas próximas execuções, com detecção de hardware mais completa que o motor nativo.
+
+> Se o `winget` não estiver disponível na máquina (comum logo após formatar), os runtimes acima não são instalados e o programa avisa isso claramente — nunca finge sucesso. Instale o "App Installer" pela Microsoft Store e rode a opção de novo.
 
 ---
 

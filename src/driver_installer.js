@@ -1,83 +1,124 @@
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
 const { detectHardware, runPowerShell } = require('./hardware_detector');
 
-function runSilent(cmd) {
+function runSilent(cmd, timeoutMs = 120000) {
   try {
-    execSync(cmd, { stdio: 'inherit' });
+    execSync(cmd, { stdio: 'ignore', timeout: timeoutMs });
     return true;
   } catch (e) {
     return false;
   }
 }
 
+// CORREÇÃO (bug real encontrado num relato de usuário — "winget" não reconhecido numa
+// máquina real): esta função nunca verificava se o winget existia antes de usá-lo pra TUDO
+// (VC++, DirectX, .NET, drivers de GPU, 7-Zip, Git, Node). Numa máquina sem winget (comum,
+// principalmente logo após formatar — o "App Installer" da Microsoft Store pode não estar
+// presente), toda instalação falhava silenciosamente e mesmo assim a função imprimia
+// "✅ ... INSTALADOS COM SUCESSO!" no final, incondicionalmente.
+function isWingetAvailable() {
+  try {
+    execSync('winget --version', { stdio: 'ignore', timeout: 5000 });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Driver de GPU NÃO é baixado às cegas por winget aqui: os pacotes de driver de fabricante
+// (Nvidia.GeForceExperience, AMD.RadeonSoftware, etc.) existem no catálogo, mas cada um exige
+// aceitar termos próprios e frequentemente instala um app completo (GeForce Experience,
+// Adrenalin) só pra conseguir o driver — pesado e não é o que o usuário provavelmente quer só
+// pra instalar um driver. Abre a página oficial certa em vez disso, mesma abordagem já usada
+// na versão nativa (C#) deste optimizer.
+const GPU_VENDOR_PAGES = {
+  NVIDIA: 'https://www.nvidia.com/Download/index.aspx',
+  AMD: 'https://www.amd.com/en/support',
+  Intel: 'https://www.intel.com/content/www/us/en/support/detect.html'
+};
+
+function openUrl(url) {
+  // execSync já usa cmd.exe como shell por padrão no Windows, então `start` (builtin do
+  // cmd) resolve direto sem precisar prefixar "cmd /c" explicitamente.
+  return runSilent(`start "" "${url}"`, 5000);
+}
+
 function installDriversAndRuntimes() {
   const hardware = detectHardware();
   console.log('\n================================================================');
-  console.log('    🔄 REINSTALAÇÃO DE DRIVERS OFICIAIS & RUNTIMES PÓS-FORMATAÇÃO');
+  console.log('    🔄 CENTRAL PÓS-FORMATAÇÃO — DRIVERS E RUNTIMES OFICIAIS');
   console.log('================================================================');
   console.log(`🖥️  Processador Detectado: ${hardware.cpu.name} [${hardware.cpu.vendor}]`);
   console.log(`🎮  Placa de Vídeo Detectada: ${hardware.gpu.primary} [${hardware.gpu.vendor}]`);
   console.log(`🪟  Sistema: ${hardware.os.caption} (Build ${hardware.os.build})`);
   console.log('================================================================\n');
 
-  console.log('🔍 [Passo 1/5] Escaneando barramentos de hardware e dispositivos (PnP Device Scan)...');
+  console.log('🔍 [Passo 1/4] Escaneando barramentos de hardware e dispositivos (PnP Device Scan)...');
   try {
     execSync('pnputil /scan-devices', { stdio: 'ignore' });
     console.log('✅ Barramento PnP atualizado com sucesso.');
-  } catch (e) {}
-
-  console.log('\n📦 [Passo 2/5] Instalando Pacotes Essenciais de Runtimes para Jogos & Godot...');
-  
-  // 1. Visual C++ All-in-One (x64 and x86)
-  console.log('• Instalando Microsoft Visual C++ 2015-2022 Redistributable (x64 e x86)...');
-  runSilent('winget install --id Microsoft.VCRedist.2015+.x64 --silent --accept-package-agreements --accept-source-agreements --source winget');
-  runSilent('winget install --id Microsoft.VCRedist.2015+.x86 --silent --accept-package-agreements --accept-source-agreements --source winget');
-
-  // 2. DirectX End-User Runtimes
-  console.log('• Verificando/Instalando DirectX End-User Runtime...');
-  runSilent('winget install --id Microsoft.DirectX --silent --accept-package-agreements --accept-source-agreements --source winget');
-
-  // 3. .NET Desktop Runtime
-  console.log('• Instalando Microsoft .NET Desktop Runtime 8...');
-  runSilent('winget install --id Microsoft.DotNet.DesktopRuntime.8 --silent --accept-package-agreements --accept-source-agreements --source winget');
-
-  console.log('\n🎮 [Passo 3/5] Identificando e Baixando Driver Oficial da Placa de Vídeo...');
-  if (hardware.gpu.isNvidia) {
-    console.log(`• Detectada GPU NVIDIA (${hardware.gpu.primary}). Baixando/Atualizando NVIDIA Game Ready Drivers...`);
-    console.log('  Instalando NVIDIA GeForce Experience / App Oficial via winget...');
-    runSilent('winget install --id Nvidia.GeForceExperience --silent --accept-package-agreements --accept-source-agreements --source winget');
-    console.log('  Instalando NVIDIA PhysX System Software...');
-    runSilent('winget install --id Nvidia.PhysX --silent --accept-package-agreements --accept-source-agreements --source winget');
-  } else if (hardware.gpu.isAMD) {
-    console.log(`• Detectada GPU AMD Radeon (${hardware.gpu.primary}). Baixando AMD Software: Adrenalin Edition...`);
-    runSilent('winget install --id AMD.RadeonSoftware --silent --accept-package-agreements --accept-source-agreements --source winget');
-  } else if (hardware.gpu.isIntel) {
-    console.log(`• Detectada GPU Intel Arc/Iris (${hardware.gpu.primary}). Baixando Intel Graphics Driver...`);
-    runSilent('winget install --id Intel.GraphicsDriver --silent --accept-package-agreements --accept-source-agreements --source winget');
+  } catch (e) {
+    console.log('⚠️ Não foi possível escanear o barramento PnP.');
   }
 
-  console.log('\n⚙️  [Passo 4/5] Instalando Utilitários Essenciais de Produtividade & Game Dev...');
-  console.log('• Instalando 7-Zip, Git e Node.js LTS...');
-  runSilent('winget install --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements --source winget');
-  runSilent('winget install --id Git.Git --silent --accept-package-agreements --accept-source-agreements --source winget');
-  runSilent('winget install --id OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements --source winget');
+  console.log('\n🎮 [Passo 2/4] Driver de GPU:', `${hardware.gpu.primary} [${hardware.gpu.vendor}]`);
+  const vendorPage = GPU_VENDOR_PAGES[hardware.gpu.vendor];
+  if (vendorPage) {
+    console.log(`  🌐 Abrindo a página oficial de drivers ${hardware.gpu.vendor} no navegador padrão...`);
+    if (!openUrl(vendorPage)) {
+      console.log(`  ⚠️ Não consegui abrir o navegador automaticamente. Acesse manualmente: ${vendorPage}`);
+    }
+  } else {
+    console.log('  ℹ️ Fabricante de GPU não identificado com certeza — acesse o site oficial do fabricante da sua placa de vídeo.');
+  }
 
-  console.log('\n🔄 [Passo 5/5] Buscando atualizações de drivers de Chipset, Áudio e Rede via Windows Update...');
-  try {
-    console.log('  Disparando verificação de drivers nativos do Windows Update...');
-    runPowerShell(`
-      $Session = New-Object -ComObject Microsoft.Update.Session
-      $Searcher = $Session.CreateUpdateSearcher()
-      $Searcher.ServerSelection = 2 # Windows Update
-      Write-Host "• Verificando catalogo de drivers homologados..."
-    `);
-  } catch (e) {}
+  console.log('\n🔌 [Passo 3/4] Chipset, áudio, rede e demais periféricos:');
+  console.log('  🌐 Abrindo Atualizações Opcionais do Windows (drivers via Windows Update)...');
+  if (!openUrl('ms-settings:windowsupdate-optionalupdates')) {
+    console.log('  ⚠️ Abra manualmente em Configurações > Windows Update > Atualizações opcionais.');
+  }
+
+  console.log('\n📦 [Passo 4/4] Runtimes essenciais (Microsoft, via winget):');
+  let installedCount = 0;
+  let totalPackages = 0;
+
+  if (!isWingetAvailable()) {
+    console.log('  ⚠️ \'winget\' não encontrado nesta máquina — runtimes NÃO foram instalados.');
+    console.log('     Instale o \'App Installer\' pela Microsoft Store (gratuito e oficial) e rode esta opção de novo,');
+    console.log('     ou baixe manualmente: Visual C++ Redistributable (https://aka.ms/vs/17/release/vc_redist.x64.exe)');
+    console.log('     e DirectX (https://www.microsoft.com/en-us/download/details.aspx?id=35).');
+  } else {
+    const packages = [
+      { name: 'Microsoft Visual C++ 2015-2022 Redistributable (x64)', id: 'Microsoft.VCRedist.2015+.x64' },
+      { name: 'Microsoft Visual C++ 2015-2022 Redistributable (x86)', id: 'Microsoft.VCRedist.2015+.x86' },
+      { name: 'DirectX End-User Runtime', id: 'Microsoft.DirectX' },
+      { name: 'Microsoft .NET Desktop Runtime 8', id: 'Microsoft.DotNet.DesktopRuntime.8' },
+      // Node.js LTS de propósito: instalar ele aqui destrava a implementação completa
+      // (index.js, com detecção de storage/laptop que a versão nativa em C# não tem) pras
+      // próximas vezes que o optimizer rodar, em vez de ficar preso no motor nativo pra sempre.
+      { name: 'Node.js LTS', id: 'OpenJS.NodeJS.LTS' }
+    ];
+    totalPackages = packages.length;
+    for (const pkg of packages) {
+      console.log(`  ⬇️  Instalando ${pkg.name}...`);
+      const ok = runSilent(`winget install --id ${pkg.id} --silent --accept-package-agreements --accept-source-agreements --source winget`);
+      console.log(`     ${ok ? '✅ Instalado (ou já estava na versão mais recente).' : '⚠️ Falhou — verifique a conexão com a internet ou se o pacote existe no catálogo winget.'}`);
+      if (ok) installedCount++;
+    }
+  }
 
   console.log('\n================================================================');
-  console.log('    ✅ DRIVERS & RUNTIMES PÓS-FORMATAÇÃO INSTALADOS COM SUCESSO! ');
-  console.log('================================================================');
-  console.log('💡 Dica: Todos os runtimes de C++, DirectX e drivers de GPU foram');
-  console.log('   configurados. Reinicie o computador para concluir todas as instalações.\n');
+  if (totalPackages > 0) {
+    console.log(`✅ Central pós-formatação concluída: ${installedCount}/${totalPackages} runtimes confirmados.`);
+  } else {
+    console.log('⚠️ Central pós-formatação concluída SEM instalar runtimes (winget indisponível — ver aviso acima).');
+  }
+  console.log('   Driver de GPU e drivers de chipset/periféricos foram abertos nas páginas');
+  console.log('   oficiais acima — a instalação final desses é manual, por não existir um');
+  console.log('   link de download silencioso oficial e estável para eles.');
+  console.log('================================================================\n');
+
+  return { installedCount, totalPackages, wingetAvailable: totalPackages > 0, gpuVendor: hardware.gpu.vendor };
 }
 
-module.exports = { installDriversAndRuntimes };
+module.exports = { installDriversAndRuntimes, isWingetAvailable, GPU_VENDOR_PAGES };
