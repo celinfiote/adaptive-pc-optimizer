@@ -586,17 +586,32 @@ namespace AdaptivePCOptimizer
             }
             else
             {
+                // Mesma lista de pacotes que driver_installer.js (lado Node) usa — mantidas
+                // as duas implementações em paralelo pra não divergir o que cada uma instala.
                 string[][] packages = new string[][] {
                     new string[] { "Microsoft Visual C++ Redistributable (x64)", "Microsoft.VCRedist.2015+.x64" },
                     new string[] { "Microsoft Visual C++ Redistributable (x86)", "Microsoft.VCRedist.2015+.x86" },
-                    new string[] { "DirectX End-User Runtime", "Microsoft.DirectX" }
+                    new string[] { "DirectX End-User Runtime", "Microsoft.DirectX" },
+                    new string[] { "Microsoft .NET Desktop Runtime 8", "Microsoft.DotNet.DesktopRuntime.8" },
+                    new string[] { "Node.js LTS", "OpenJS.NodeJS.LTS" }
                 };
                 int installedCount = 0;
                 foreach (string[] pkg in packages)
                 {
+                    // Checa ANTES de instalar (pedido explícito do usuário: evitar conflito
+                    // reinstalando por cima do que já está presente). RunSilent aqui já
+                    // devolve exatamente o código de saída do winget: 0 = achou instalado,
+                    // != 0 = "No installed package found" — não tenta parsear a tabela em
+                    // texto, cuja largura de coluna varia por pacote e quebra com regex.
+                    if (RunSilent("winget", "list --id " + pkg[1] + " --exact", 15000))
+                    {
+                        Console.WriteLine("  ✔️  " + pkg[0] + ": já instalado — pulando (sem reinstalar por cima, evita qualquer conflito).");
+                        installedCount++;
+                        continue;
+                    }
                     Console.WriteLine("  ⬇️  Instalando " + pkg[0] + "...");
                     bool ok = RunSilent("winget", "install --id " + pkg[1] + " --silent --accept-package-agreements --accept-source-agreements --source winget", 120000);
-                    Console.WriteLine("     " + (ok ? "✅ Instalado (ou já estava atualizado)." : "⚠️ Falhou — verifique a conexão com a internet."));
+                    Console.WriteLine("     " + (ok ? "✅ Instalado com sucesso." : "⚠️ Falhou — verifique a conexão com a internet."));
                     if (ok) installedCount++;
                 }
                 Console.WriteLine("\n  Resultado real: " + installedCount + "/" + packages.Length + " runtimes confirmados.");

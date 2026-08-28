@@ -43,8 +43,17 @@ Aplica o conjunto de otimizações não-destrutivas calibradas para a sua combin
 
 ### 2. 🔄 [2] FORMATEI MEU PC AGORA (Central de Drivers & Runtimes)
 Acabou de formatar o computador? Essa opção detecta o hardware do computador e instala/atualiza automaticamente todos os componentes e drivers oficiais necessários para rodar qualquer jogo ou motor gráfico do zero:
+
+> ✅ **Verificação anti-conflito (28/08/2026)**: antes de instalar QUALQUER runtime, o
+> programa consulta `winget list --id <pacote> --exact` pra checar se já está instalado —
+> se estiver, pula e mostra "já instalado", nunca reinstala por cima. Zero risco de
+> conflito com o que já existe na máquina. Driver de GPU e drivers de chipset/periféricos
+> nunca são instalados às cegas por script (ver itens 5 e 6 abaixo) — só os runtimes da
+> Microsoft/Node.js passam por instalação silenciosa, e mesmo esses só depois de confirmar
+> que não estão presentes ainda.
+
 1. **Varredura PnP de Dispositivos**: Identifica barramentos e componentes sem driver.
-2. **Microsoft Visual C++ Redistributable All-in-One**: Instala silenciosamente todas as bibliotecas C++ de 2015 a 2022 (x86 e x64).
+2. **Microsoft Visual C++ Redistributable All-in-One**: Instala silenciosamente todas as bibliotecas C++ de 2015 a 2022 (x86 e x64) — só se ainda não estiverem instaladas.
 3. **DirectX End-User Runtime**: Atualiza todas as bibliotecas legadas e modernas do DirectX 9, 10, 11 e 12.
 4. **Microsoft .NET Desktop Runtime 8**: Runtimes necessários para ferramentas de desenvolvimento e jogos modernos.
 5. **Driver Oficial de GPU**: Detecta se a placa é **NVIDIA**, **AMD** ou **Intel** e abre a página oficial de download/detecção do fabricante certo no navegador — a instalação de driver de GPU é sempre feita manualmente pelo usuário na página oficial, nunca às cegas por script (cada fabricante exige aceitar termos próprios e não existe link de download silencioso oficial e estável).

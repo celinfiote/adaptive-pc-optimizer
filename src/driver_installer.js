@@ -43,6 +43,26 @@ function openUrl(url) {
   return runSilent(`start "" "${url}"`, 5000);
 }
 
+// CORREÇÃO (pedido explícito do usuário): antes disto, cada runtime ia direto pro
+// `winget install` sem checar se já existia instalado — funcionava na prática porque o
+// winget tem sua própria idempotência interna (não reinstala por cima do que já está
+// atualizado), mas isso acontecia "escondido" dentro do winget, sem o optimizer nunca
+// confirmar/relatar isso pro usuário nem decidir por conta própria não repetir a instalação.
+// Agora consulta explicitamente ANTES de instalar, com `winget list --id <id> --exact`: se
+// já está instalado, pula o install em vez de disparar o instalador de novo por cima — zero
+// chance de conflito. Detecção por CÓDIGO DE SAÍDA (0 = achou, 20 = não achou), não por
+// parsing da tabela em texto — a largura das colunas do winget varia por pacote (o nome de
+// exibição do VCRedist, por exemplo, já vem colado no Id sem 2 espaços de separação em
+// algumas versões), então tentar recortar colunas por regex quebra de forma imprevisível.
+function isPackageInstalled(pkgId) {
+  try {
+    execSync(`winget list --id ${pkgId} --exact`, { stdio: 'ignore', timeout: 15000 });
+    return true;
+  } catch (e) {
+    return false; // exit code != 0 = "No installed package found" = não está instalado
+  }
+}
+
 function installDriversAndRuntimes() {
   const hardware = detectHardware();
   console.log('\n================================================================');
@@ -100,9 +120,14 @@ function installDriversAndRuntimes() {
     ];
     totalPackages = packages.length;
     for (const pkg of packages) {
+      if (isPackageInstalled(pkg.id)) {
+        console.log(`  ✔️  ${pkg.name}: já instalado — pulando (sem reinstalar por cima, evita qualquer conflito).`);
+        installedCount++;
+        continue;
+      }
       console.log(`  ⬇️  Instalando ${pkg.name}...`);
       const ok = runSilent(`winget install --id ${pkg.id} --silent --accept-package-agreements --accept-source-agreements --source winget`);
-      console.log(`     ${ok ? '✅ Instalado (ou já estava na versão mais recente).' : '⚠️ Falhou — verifique a conexão com a internet ou se o pacote existe no catálogo winget.'}`);
+      console.log(`     ${ok ? '✅ Instalado com sucesso.' : '⚠️ Falhou — verifique a conexão com a internet ou se o pacote existe no catálogo winget.'}`);
       if (ok) installedCount++;
     }
   }
@@ -121,4 +146,4 @@ function installDriversAndRuntimes() {
   return { installedCount, totalPackages, wingetAvailable: totalPackages > 0, gpuVendor: hardware.gpu.vendor };
 }
 
-module.exports = { installDriversAndRuntimes, isWingetAvailable, GPU_VENDOR_PAGES };
+module.exports = { installDriversAndRuntimes, isWingetAvailable, isPackageInstalled, GPU_VENDOR_PAGES };
