@@ -1,83 +1,65 @@
-# ⚡ Adaptive PC Optimizer (Universal Tweak Engine)
+# ⚡ Adaptive PC Optimizer (Universal Tweak & Driver Engine)
 
-> **Otimizador de Desempenho e Baixa Latência Universal e Adaptativo para Windows 10 & 11**  
-> Desenvolvido especificamente para **Gamers Competitivos**, **Desenvolvedores de Jogos (Godot/Unity/Unreal)** e **Workloads Multi-Agentes de IA (Orca/Antigravity)**.
-
----
-
-## 🎯 Filosofia de Design: *Zero Destruição, Máxima Eficiência*
-
-Ao contrário de scripts de "debloat" genéricos que quebram recursos essenciais do Windows, o **Adaptive PC Optimizer** opera sob diretrizes estritas:
-1. **NENHUMA função essencial é desativada**: Bluetooth, Wi-Fi, Xbox Live, impressoras, áudio e atualizações permanecem intactos.
-2. **Adaptação Dinâmica ao Hardware**: Detecta automaticamente processador (AMD/Intel), placa de vídeo (NVIDIA/AMD/Intel), quantidade de RAM e tipo de armazenamento (NVMe/SSD/HDD) para aplicar os parâmetros ideais.
-3. **Equilíbrio Jogo + Desenvolvimento + IA**: Garante framerates altos e estáveis em jogos enquanto compila código no Godot e executa múltiplos agentes de IA em segundo plano sem engasgos ou travamentos.
-4. **Snapshot e Restauração em 1 Clique**: Cria automaticamente um backup completo do Registro antes de aplicar qualquer alteração, permitindo reversão instantânea.
+> **Software Universal e Adaptativo para Windows 10 & 11 (.EXE Standalone)**  
+> Otimizador de Desempenho, Baixa Latência e **Central Pós-Formatação de Drivers Oficiais**.  
+> Criado para **Gamers Competitivos**, **Desenvolvedores de Jogos (Godot/Unity/Unreal)** e **Workloads Multi-Agentes de IA (Orca/Antigravity)**.
 
 ---
 
-## 🛠️ O que o Programa Otimiza?
+## 🎯 As Duas Funções Principais do Programa
 
-### 1. ⚙️ Escalonamento de CPU & Threads (CPU Scheduler)
-- **`Win32PrioritySeparation = 0x26`**: Ajusta o quantum de CPU para 3:1 em favor do processo em primeiro plano (jogo/editor), entregando frametimes lisos sem congelar threads de background.
-- **MMCSS (Multimedia Class Scheduler)**:
-  - Remove o estrangulamento de rede durante jogos (`NetworkThrottlingIndex = 0xFFFFFFFF`).
-  - Reserva 90% de prioridade para processos em tempo real e 10% para o sistema operacional (`SystemResponsiveness = 10`).
-- **CSRSS (Client Server Runtime)**: Priorização do despacho de mensagens de janela para baixa latência de clique e renderização.
-
-### 2. 🎮 Drivers Gráficos, DirectX & Comunicação com GPU
-- **HAGS (Hardware Accelerated GPU Scheduling)**: Habilita agendamento acelerado por hardware em GPUs compatíveis para reduzir a latência entre CPU e GPU.
-- **DirectX Low Latency Queue**: Configura `MaxFrameLatency = 1` para entrega imediata de quadros sem acúmulo de buffer.
-- **Shader Cache de 10GB**: Expande o buffer de shaders pré-compilados no disco, eliminando os micro-travamentos (*stutters*) comuns ao carregar novos efeitos visuais em jogos e na engine Godot.
-- **DWM Multi-Monitor Sync**: Sincronização limpa entre múltiplos monitores com taxas de atualização diferentes (ex: 144Hz + 60Hz).
-
-### 3. 🖱️ Periféricos & Comunicação com Hardware (Mouse, Teclado, Monitores)
-- **True 1:1 Raw Mouse Input**: Desativa as curvas de aceleração do ponteiro do Windows, garantindo precisão matemática e resposta instantânea do sensor do mouse.
-- **Taxa de Repetição do Teclado**: Reduz o atraso de repetição para 0ms e taxa máxima (31) para movimentação ágil e digitação rápida.
-- **Buffer de Fila HID (USB/PS2)**: Ajusta o tamanho da fila de pacotes para 100, ideal para mouses de alta taxa de sondagem (1000Hz a 8000Hz).
-
-### 4. 💾 Armazenamento & Memória RAM
-- **NTFS Memory Usage (Nível 2)**: Amplia a memória de cache para consultas de tabelas de arquivos NTFS, acelerando drasticamente o carregamento de milhares de assets, scripts e repositórios Git.
-- **NTFS Disable Last Access Update**: Desativa a gravação desnecessária de data em cada leitura de arquivo.
-- **Disable Paging Executive**: Mantém drivers do sistema e código do kernel na RAM física (para sistemas com 16GB+), eliminando paginação lenta em disco.
-
-### 5. 🌐 Rede & Pilha TCP/IP (Baixo Ping & Streaming de APIs)
-- **TCP No Delay & TCP Ack Frequency = 1**: Desativa o Algoritmo de Nagle, enviando pacotes instantaneamente sem aguardar confirmações lentas.
-- **Receive Side Scaling (RSS)**: Distribui o processamento de pacotes de rede entre todos os núcleos da CPU.
-
-### 6. 🛠️ Modo Híbrido: Game Dev + Jogos + Multi-Agentes
-- **Prioridade de Processo para Godot & IDEs**: Define prioridade de CPU e I/O de alta performance para a engine.
-- **Desativação de Captura Passiva do GameDVR**: Libera 5% a 10% de recursos de GPU e encoders de vídeo sem afetar screenshots ou utilitários manuais.
-
----
-
-## 🚀 Como Usar no Seu Computador
-
-### ⚡ Método Rápido (1 Clique no Windows Explorer):
-1. Dê 2 cliques no arquivo [`optimize.bat`](optimize.bat).
-2. O programa detectará seu hardware automaticamente, criará um backup e aplicará todas as otimizações.
-3. Reinicie o computador para usufruir de 100% dos ganhos de latência de drivers e kernel.
-
-### 💻 Método via Linha de Comando (CLI):
-```bash
-# Aplicar todas as otimizações adaptativas
-node index.js --apply
-
-# Verificar status e métricas de baixa latência
-node index.js --status
-
-# Restaurar configurações originais a partir do backup
-node index.js --restore
+```
+┌──────────────────────────────────────────────────────────────┐
+│                      MENU DE OPÇÕES                          │
+├──────────────────────────────────────────────────────────────┤
+│  [1] ⚡ OTIMIZAR MEU PC (Adaptive PC Optimizer)               │
+│  [2] 🔄 FORMATEI MEU PC AGORA (Instalar Drivers e Runtimes)  │
+│  [3] 📊 VERIFICAR HARDWARE & STATUS DE LATÊNCIA              │
+│  [4] 🛡️ RESTAURAR BACKUP ORIGINAL DO REGISTRO                │
+│  [0] ❌ SAIR                                                  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🔄 Como Desfazer / Restaurar o Backup
+### 1. ⚡ [1] OTIMIZAR MEU PC (Adaptive Tweak Engine)
+Aplica o conjunto de otimizações não-destrutivas calibradas para a sua combinação exata de processador, placa de vídeo, RAM e armazenamento:
+- **CPU & Escalonamento de Threads**: `Win32PrioritySeparation = 0x26` *(3:1 Foreground Boost)* e `MMCSS` com 90% realtime / 10% background para jogos fluidos e IDEs rápidas sem travar os agentes de IA.
+- **Drivers de Vídeo & DirectX**: Habilita **HAGS** *(Hardware Accelerated GPU Scheduling)*, fila de baixa latência `MaxFrameLatency = 1` e aloca **10GB de Shader Cache** para eliminar micro-travamentos (*stutters*).
+- **Comunicação com Periféricos**: Mouse com resposta **Raw Input 1:1** *(sem aceleração do Windows)*, teclado com **0ms de atraso** e fila HID ajustada para mouses de 1000Hz a 8000Hz.
+- **Armazenamento & RAM**: Cache de tabelas NTFS nível 2 *(leitura ultra-rápida de código/assets)* e retenção de drivers do kernel na RAM física.
+- **Pilha de Rede TCP/IP**: `TCPNoDelay = 1` e `TcpAckFrequency = 1` *(desativa o Algoritmo de Nagle para menor ping e resposta imediata de APIs)*.
+- **Híbrido Game Dev**: Prioridade de alta performance para a engine Godot e desativação de gravação passiva do GameDVR *(libera 5-10% de GPU)*.
 
-Caso queira reverter para as configurações padrão a qualquer momento:
-1. Dê 2 cliques no arquivo [`restore.bat`](restore.bat) ou execute `node index.js --restore`.
-2. O programa restaurará automaticamente o snapshot original salvo na pasta `backups/`.
+---
+
+### 2. 🔄 [2] FORMATEI MEU PC AGORA (Central de Drivers & Runtimes)
+Acabou de formatar o computador? Essa opção detecta o hardware do computador e instala/atualiza automaticamente todos os componentes e drivers oficiais necessários para rodar qualquer jogo ou motor gráfico do zero:
+1. **Varredura PnP de Dispositivos**: Identifica barramentos e componentes sem driver.
+2. **Microsoft Visual C++ Redistributable All-in-One**: Instala silenciosamente todas as bibliotecas C++ de 2015 a 2022 (x86 e x64).
+3. **DirectX End-User Runtime**: Atualiza todas as bibliotecas legadas e modernas do DirectX 9, 10, 11 e 12.
+4. **Microsoft .NET Desktop Runtime 8**: Runtimes necessários para ferramentas de desenvolvimento e jogos modernos.
+5. **Driver Oficial de GPU**: Detecta se a placa é **NVIDIA**, **AMD** ou **Intel Arc** e baixa o software oficial do fabricante (*GeForce Experience / PhysX / AMD Adrenalin / Intel Graphics*).
+6. **Utilitários Essenciais de Dev**: Instala 7-Zip, Git e Node.js LTS via instaladores oficiais homologados.
+
+---
+
+## 🚀 Como Executar no Windows (Qualquer Computador)
+
+1. Dê 2 cliques no executável [`AdaptivePCOptimizer.exe`](AdaptivePCOptimizer.exe).
+2. O programa solicitará privilégios de Administrador automaticamente *(UAC)*.
+3. Escolha a opção desejada no menu interativo (`1` para otimizar ou `2` pós-formatação).
+
+*(Você também pode executar via linha de comando ou script batch: [`optimize.bat`](optimize.bat)).*
+
+---
+
+## 🔄 Como Desfazer / Restaurar Configurações
+
+O programa cria um snapshot automático do Registro antes de alterar qualquer valor. Para voltar ao estado original:
+- Abra o programa e escolha a opção **`[4] RESTAURAR BACKUP`** ou execute [`restore.bat`](restore.bat).
 
 ---
 
 ## 📄 Licença
-Distribuído sob a licença **MIT**. Livre para uso, modificação e distribuição em qualquer máquina.
+Distribuído sob licença **MIT**. Gratuito e livre para uso pessoal e comercial em qualquer computador.

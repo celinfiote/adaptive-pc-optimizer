@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * ⚡ Adaptive PC Optimizer (Universal Tweak Engine)
- * Otimizador de Desempenho e Baixa Latência Adaptativo para Gamers e Desenvolvedores de Jogos
- * Desenvolvido para máxima performance de hardware sem desativar funções essenciais do sistema.
+ * ⚡ Adaptive PC Optimizer (Universal Tweak & Driver Engine)
+ * Otimizador de Desempenho e Baixa Latência + Central Pós-Formatação de Drivers Oficiais
+ * Desenvolvido para Gamers e Desenvolvedores de Jogos.
  */
 
 const readline = require('readline');
@@ -15,12 +15,13 @@ const { applyInputDevicesTweaks } = require('./src/tweaks/input_devices');
 const { applyStorageMemoryTweaks } = require('./src/tweaks/storage_memory');
 const { applyNetworkLatencyTweaks } = require('./src/tweaks/network_latency');
 const { applyDevGamingHybridTweaks } = require('./src/tweaks/dev_gaming_hybrid');
+const { installDriversAndRuntimes } = require('./src/driver_installer');
 const { runBenchmark } = require('./src/benchmark');
 
 function printBanner(hardware) {
   console.log('\n================================================================');
   console.log('       ⚡ ADAPTIVE PC OPTIMIZER — UNIVERSAL TWEAK ENGINE        ');
-  console.log('       Performance, Low Latency & Multi-Agent Workload Tuning   ');
+  console.log('       Performance, Low Latency & Post-Formatting Driver Hub    ');
   console.log('================================================================');
   console.log(`🖥️  Processador: ${hardware.cpu.name} (${hardware.cpu.cores}C/${hardware.cpu.threads}T)`);
   console.log(`🎮  Placa de Vídeo: ${hardware.gpu.primary} [${hardware.gpu.vendor}]`);
@@ -95,6 +96,12 @@ function main() {
     process.exit(0);
   }
 
+  if (args.includes('--drivers') || args.includes('-d') || args.includes('format')) {
+    printBanner(hardware);
+    installDriversAndRuntimes();
+    process.exit(0);
+  }
+
   if (args.includes('--restore') || args.includes('-r') || args.includes('restore')) {
     printBanner(hardware);
     restoreLatestBackup();
@@ -106,30 +113,36 @@ function main() {
     process.exit(0);
   }
 
-  // Interactive CLI Menu
+  // Interactive Flagship Menu
   printBanner(hardware);
-  console.log('Selecione uma opção:');
-  console.log('  1. ⚡ Aplicar Otimização Adaptativa Completa (Recomendado)');
-  console.log('  2. 📊 Verificar Status e Métricas de Latência');
-  console.log('  3. 🔄 Restaurar Backup Original do Registro');
-  console.log('  4. ❌ Sair\n');
+  console.log('┌──────────────────────────────────────────────────────────────┐');
+  console.log('│                      MENU DE OPÇÕES                          │');
+  console.log('├──────────────────────────────────────────────────────────────┤');
+  console.log('│  [1] ⚡ OTIMIZAR MEU PC (Adaptive PC Optimizer)               │');
+  console.log('│  [2] 🔄 FORMATEI MEU PC AGORA (Instalar Drivers e Runtimes)  │');
+  console.log('│  [3] 📊 VERIFICAR HARDWARE & STATUS DE LATÊNCIA              │');
+  console.log('│  [4] 🛡️ RESTAURAR BACKUP ORIGINAL DO REGISTRO                │');
+  console.log('│  [0] ❌ SAIR                                                  │');
+  console.log('└──────────────────────────────────────────────────────────────┘\n');
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
   });
 
-  rl.question('Digite a opção desejada [1-4]: ', (answer) => {
+  rl.question('Escolha uma opção [0-4]: ', (answer) => {
     rl.close();
     const opt = answer.trim();
     if (opt === '1') {
       applyAllTweaks(hardware);
     } else if (opt === '2') {
-      showStatus();
+      installDriversAndRuntimes();
     } else if (opt === '3') {
+      showStatus();
+    } else if (opt === '4') {
       restoreLatestBackup();
     } else {
-      console.log('Operação cancelada.');
+      console.log('Operação finalizada.');
     }
   });
 }
@@ -138,4 +151,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { detectHardware, applyAllTweaks, restoreLatestBackup };
+module.exports = { detectHardware, applyAllTweaks, installDriversAndRuntimes, restoreLatestBackup };
