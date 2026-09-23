@@ -1,4 +1,4 @@
 node_modules/
-backups/registry_backup_*.reg
+backups/
 .DS_Store
 Thumbs.db

@@ -15,7 +15,9 @@ function applyCpuSchedulerTweaks(hardware) {
   // 1. Win32PrioritySeparation
   // Value 0x26 (38 dec): Short variable quantum with 3:1 foreground boost.
   // Perfect for responsive 144Hz/240Hz gaming + snappy IDE response without freezing background agent threads.
-  const priorityValue = hardware.cpu.threads >= 8 ? '0x26' : '0x28';
+  // Sempre 0x26 (boost 3:1 de primeiro plano). Antes, <8 threads recebia 0x28 = quantum
+  // fixo SEM boost — o oposto do prometido, justamente em PCs de entrada.
+  const priorityValue = '0x26';
   runReg(`reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\PriorityControl" /v "Win32PrioritySeparation" /t REG_DWORD /d ${priorityValue} /f`);
   log.push(`• Escalonamento de Threads CPU: Win32PrioritySeparation configurado para ${priorityValue} (Resposta ágil em primeiro plano + threads de background balanceadas).`);
 

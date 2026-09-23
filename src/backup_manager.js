@@ -1,6 +1,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const BACKUP_DIR = path.join(__dirname, '..', 'backups');
 
@@ -37,6 +38,7 @@ function createRegistryBackup() {
   // Save metadata
   const metaFile = path.join(BACKUP_DIR, 'latest_backup.json');
   fs.writeFileSync(metaFile, JSON.stringify({
+    machine: os.hostname(),
     timestamp,
     backupFile,
     successCount
@@ -53,19 +55,31 @@ function restoreLatestBackup() {
   }
 
   const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+  // Recusa backup sem origem ou de outra máquina: o export de Tcpip\Parameters inclui o
+  // Hostname, e importar o backup de outro PC renomeava esta máquina.
+  if (!meta.machine || meta.machine.toLowerCase() !== os.hostname().toLowerCase()) {
+    console.log('❌ Backup criado em outro computador (' + (meta.machine || 'origem desconhecida') + ') — nada foi restaurado, por segurança.');
+    return false;
+  }
   console.log(`🔄 Restaurando snapshot de segurança de ${meta.timestamp}...`);
 
-  for (let i = 0; i < (meta.successCount || 6); i++) {
+  const total = meta.successCount || 6;
+  let restored = 0;
+  for (let i = 0; i < total; i++) {
     const regFile = `${meta.backupFile}_${i}.reg`;
     if (fs.existsSync(regFile)) {
       try {
         execSync(`reg import "${regFile}"`, { stdio: 'ignore' });
+        restored++;
       } catch (e) {}
     }
   }
 
-  console.log('✅ Configurações originais restauradas com sucesso!');
-  return true;
+  // Honesto: reg import só sobrescreve valores existentes no backup, não apaga os
+  // que a otimização adicionou. Reversão completa = motor nativo (.exe), que usa
+  // Ponto de Restauração do Windows + diário por valor.
+  console.log(`${restored === total ? '✅' : '⚠️'} ${restored}/${total} chaves reimportadas (restauração parcial — valores novos não são apagados).`);
+  return restored === total;
 }
 
 module.exports = { createRegistryBackup, restoreLatestBackup, BACKUP_DIR };

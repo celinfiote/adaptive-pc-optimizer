@@ -22,6 +22,19 @@ namespace AdaptivePCOptimizer
         public int OsBuild = 19045;
     }
 
+    // Estado ORIGINAL de um único valor do Registro, capturado imediatamente antes de o
+    // programa alterá-lo — permite desfazer exatamente o que foi mudado (inclusive apagar
+    // valores que não existiam antes), coisa que "reg export/import" de chaves inteiras
+    // não consegue: import só sobrescreve, nunca apaga o que foi adicionado depois.
+    class JournalEntry
+    {
+        public string Key;
+        public string Name;
+        public bool Existed;
+        public string Type;
+        public string Data;
+    }
+
     class Program
     {
         // ============================================================
@@ -116,6 +129,35 @@ namespace AdaptivePCOptimizer
             return RunCapture("powershell", "-NoProfile -NonInteractive -Command \"" + escaped + "\"", 15000).Trim();
         }
 
+        // Scripts multi-linha: -EncodedCommand (UTF-16LE em base64) evita qualquer problema
+        // de aspas/quebra de linha ao passar o script como argumento de linha de comando.
+        static string RunPowerShellScript(string script, int timeoutMs)
+        {
+            string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            return RunCapture("powershell", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encoded, timeoutMs).Trim();
+        }
+
+        static bool AskYesNo(string prompt)
+        {
+            Console.Write(prompt);
+            try
+            {
+                while (true)
+                {
+                    ConsoleKeyInfo k = Console.ReadKey(true);
+                    char c = char.ToUpperInvariant(k.KeyChar);
+                    if (c == 'S' || c == 'Y') { Console.WriteLine("S"); return true; }
+                    if (c == 'N') { Console.WriteLine("N"); return false; }
+                }
+            }
+            catch
+            {
+                // Sem console interativo (entrada redirecionada) — escolhe o caminho seguro.
+                Console.WriteLine();
+                return false;
+            }
+        }
+
         static bool IsToolAvailable(string exe)
         {
             try
@@ -206,18 +248,25 @@ namespace AdaptivePCOptimizer
         }
 
         // ============================================================
-        // Backup / Restauração do Registro — mesmas 6 chaves e mesmo arquivo de
-        // metadados (backups/latest_backup.json) que o backup_manager.js usa, pra
-        // restaurar funcionar não importa qual das duas implementações criou o backup.
+        // Segurança em duas camadas, criadas ANTES de qualquer mudança:
+        //
+        // 1. Ponto de Restauração do Windows — reversão completa e oficial do sistema
+        //    (cobre tudo, inclusive os ajustes de rede via netsh, que não moram num valor
+        //    de Registro simples). É a rede de segurança principal.
+        // 2. Diário por valor (journal) — guarda o estado original de CADA valor que o
+        //    programa altera (inclusive "não existia"). A opção [4] usa isso pra desfazer
+        //    exatamente o que foi mudado, sem precisar reiniciar no modo de restauração.
+        //
+        // O diário é amarrado ao nome do computador em que foi criado. Bug real corrigido:
+        // a versão anterior exportava chaves inteiras (incluindo Tcpip\Parameters, que
+        // contém o Hostname) e restaurava sem checar a origem — copiar a pasta pra outro PC
+        // e clicar em "Restaurar" importava o nome e a rede da máquina original nele.
         // ============================================================
-        static readonly string[] BackupKeys = new string[] {
-            "HKLM\\SYSTEM\\CurrentControlSet\\Control\\PriorityControl",
-            "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile",
-            "HKCU\\Control Panel\\Mouse",
-            "HKCU\\Control Panel\\Keyboard",
-            "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem",
-            "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters"
-        };
+        static List<JournalEntry> journal = new List<JournalEntry>();
+        static HashSet<string> journaledIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        static List<string> failedWrites = new List<string>();
+        static int okWrites = 0;
+        static string journalPath = null;
 
         static string BackupDir()
         {
@@ -226,26 +275,137 @@ namespace AdaptivePCOptimizer
             return dir;
         }
 
-        static string CreateRegistryBackup()
+        static string B64(string s)
         {
-            string backupDir = BackupDir();
-            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
-            string backupFile = Path.Combine(backupDir, "registry_backup_" + timestamp + ".reg");
+            return Convert.ToBase64String(Encoding.UTF8.GetBytes(s ?? ""));
+        }
 
-            Console.WriteLine("🛡️ Criando snapshot de segurança do Registro em: " + backupFile);
+        static string FromB64(string s)
+        {
+            return Encoding.UTF8.GetString(Convert.FromBase64String(s ?? ""));
+        }
 
-            int successCount = 0;
-            for (int i = 0; i < BackupKeys.Length; i++)
+        static string JsonEscape(string s)
+        {
+            return (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
+        static bool CreateSystemRestorePoint()
+        {
+            Console.WriteLine("🛡️ Criando Ponto de Restauração do Windows (pode levar até 1 minuto)...");
+
+            // Compara o maior SequenceNumber antes/depois em vez da contagem: quando o
+            // Windows atinge o limite de espaço, ele apaga pontos antigos ao criar um novo,
+            // e a contagem pode ficar igual mesmo com sucesso.
+            // SystemRestorePointCreationFrequency = 0 temporariamente: sem isso o Windows
+            // recusa em silêncio se já houver um ponto criado nas últimas 24h.
+            string script = @"
+$ErrorActionPreference = 'SilentlyContinue'
+$before = (Get-ComputerRestorePoint | Measure-Object -Property SequenceNumber -Maximum).Maximum
+if ($null -eq $before) { $before = 0 }
+Enable-ComputerRestore -Drive ($env:SystemDrive + '\')
+$k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+$old = (Get-ItemProperty -Path $k -Name SystemRestorePointCreationFrequency).SystemRestorePointCreationFrequency
+Set-ItemProperty -Path $k -Name SystemRestorePointCreationFrequency -Value 0 -Type DWord
+Checkpoint-Computer -Description 'Adaptive PC Optimizer' -RestorePointType MODIFY_SETTINGS
+if ($null -eq $old) { Remove-ItemProperty -Path $k -Name SystemRestorePointCreationFrequency } else { Set-ItemProperty -Path $k -Name SystemRestorePointCreationFrequency -Value $old -Type DWord }
+$after = (Get-ComputerRestorePoint | Measure-Object -Property SequenceNumber -Maximum).Maximum
+if ($null -ne $after -and $after -gt $before) { 'RESTOREPOINT_OK' } else { 'RESTOREPOINT_FAIL' }
+";
+            string output = RunPowerShellScript(script, 180000);
+            return output.Contains("RESTOREPOINT_OK");
+        }
+
+        // Lê o estado atual de um valor. Formato de saída do reg.exe (não traduzido pelo
+        // idioma do Windows): "    Nome    REG_TIPO    dado".
+        static bool QueryRegValue(string key, string name, out string type, out string data)
+        {
+            type = null;
+            data = null;
+            string output = RunCapture("reg", "query \"" + key + "\" /v \"" + name + "\"");
+            string[] lines = output.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None);
+            foreach (string line in lines)
             {
-                bool ok = RunReg("export \"" + BackupKeys[i] + "\" \"" + backupFile + "_" + successCount + ".reg\" /y");
-                if (ok) successCount++;
+                Match m = Regex.Match(line, "^\\s+" + Regex.Escape(name) + "\\s+(REG_[A-Z_0-9]+)\\s*(.*)$", RegexOptions.IgnoreCase);
+                if (m.Success)
+                {
+                    type = m.Groups[1].Value;
+                    data = m.Groups[2].Value.TrimEnd();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static void BeginJournal()
+        {
+            journal.Clear();
+            journaledIds.Clear();
+            failedWrites.Clear();
+            okWrites = 0;
+
+            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
+            string fileName = "journal_" + timestamp + ".txt";
+            journalPath = Path.Combine(BackupDir(), fileName);
+            SaveJournal();
+
+            string metaFile = Path.Combine(BackupDir(), "latest_backup.json");
+            string json = "{\"format\":2,\"machine\":\"" + JsonEscape(Environment.MachineName) +
+                          "\",\"timestamp\":\"" + timestamp + "\",\"journalFile\":\"" + fileName + "\"}";
+            File.WriteAllText(metaFile, json, Encoding.UTF8);
+            Console.WriteLine("🛡️ Diário de alterações (pra desfazer pela opção [4]): " + journalPath);
+        }
+
+        // Regravado inteiro a cada entrada nova: se o programa for interrompido no meio,
+        // o diário em disco já tem tudo que foi alterado até ali.
+        static void SaveJournal()
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("machine\t").Append(B64(Environment.MachineName)).Append("\r\n");
+            foreach (JournalEntry e in journal)
+            {
+                sb.Append("entry\t").Append(B64(e.Key)).Append("\t").Append(B64(e.Name)).Append("\t")
+                  .Append(e.Existed ? "1" : "0").Append("\t").Append(e.Type ?? "").Append("\t")
+                  .Append(B64(e.Data)).Append("\r\n");
+            }
+            File.WriteAllText(journalPath, sb.ToString(), Encoding.UTF8);
+        }
+
+        // Toda escrita de Registro dos tweaks passa por aqui: registra o valor original
+        // (uma vez por valor), aplica, e contabiliza o resultado REAL da escrita.
+        static bool SetReg(string key, string name, string type, string data)
+        {
+            string id = key + "|" + name;
+            if (journalPath != null && !journaledIds.Contains(id))
+            {
+                JournalEntry e = new JournalEntry();
+                e.Key = key;
+                e.Name = name;
+                string oldType, oldData;
+                e.Existed = QueryRegValue(key, name, out oldType, out oldData);
+                e.Type = oldType;
+                e.Data = oldData;
+                journal.Add(e);
+                journaledIds.Add(id);
+                SaveJournal();
             }
 
-            string metaFile = Path.Combine(backupDir, "latest_backup.json");
-            string json = "{\"timestamp\":\"" + timestamp + "\",\"backupFile\":\"" + backupFile.Replace("\\", "\\\\") + "\",\"successCount\":" + successCount + "}";
-            File.WriteAllText(metaFile, json, Encoding.UTF8);
+            bool ok = RunReg("add \"" + key + "\" /v \"" + name + "\" /t " + type + " /d \"" + data + "\" /f");
+            if (ok) okWrites++;
+            else failedWrites.Add(key + "\\" + name);
+            return ok;
+        }
 
-            return backupFile;
+        static void OfferSystemRestore()
+        {
+            Console.WriteLine();
+            Console.WriteLine("💡 Reversão 100% completa (inclusive rede/netsh): use o Ponto de Restauração");
+            Console.WriteLine("   'Adaptive PC Optimizer' criado antes da otimização, na Restauração do Sistema do Windows.");
+            if (AskYesNo("   Abrir a Restauração do Sistema agora? (S/N): "))
+            {
+                try { Process.Start("rstrui.exe"); }
+                catch (Exception ex) { Console.WriteLine("   ⚠️ Não foi possível abrir: " + ex.Message); }
+            }
         }
 
         static bool RestoreLatestBackupNative()
@@ -253,65 +413,137 @@ namespace AdaptivePCOptimizer
             string metaFile = Path.Combine(BackupDir(), "latest_backup.json");
             if (!File.Exists(metaFile))
             {
-                Console.WriteLine("⚠️ Nenhum backup prévio encontrado.");
+                Console.WriteLine("⚠️ Nenhum diário de alterações encontrado nesta pasta (a opção [1] nunca rodou aqui).");
+                OfferSystemRestore();
                 return false;
             }
 
             string json = File.ReadAllText(metaFile, Encoding.UTF8);
-            Match timestampMatch = Regex.Match(json, "\"timestamp\"\\s*:\\s*\"([^\"]*)\"");
-            Match backupFileMatch = Regex.Match(json, "\"backupFile\"\\s*:\\s*\"([^\"]*)\"");
-            Match countMatch = Regex.Match(json, "\"successCount\"\\s*:\\s*(\\d+)");
-
-            string timestamp = timestampMatch.Success ? timestampMatch.Groups[1].Value : "desconhecido";
-            string backupFile = backupFileMatch.Success ? backupFileMatch.Groups[1].Value.Replace("\\\\", "\\") : null;
-            int count = countMatch.Success ? int.Parse(countMatch.Groups[1].Value) : 6;
-
-            if (string.IsNullOrEmpty(backupFile))
+            Match fileMatch = Regex.Match(json, "\"journalFile\"\\s*:\\s*\"([^\"]*)\"");
+            Match tsMatch = Regex.Match(json, "\"timestamp\"\\s*:\\s*\"([^\"]*)\"");
+            if (!fileMatch.Success)
             {
-                Console.WriteLine("⚠️ Metadados de backup corrompidos ou em formato não reconhecido.");
+                Console.WriteLine("⚠️ Backup em formato antigo, sem identificação do computador de origem —");
+                Console.WriteLine("   por segurança ele NÃO será aplicado (poderia ser de outra máquina).");
+                OfferSystemRestore();
                 return false;
             }
 
-            Console.WriteLine("🔄 Restaurando snapshot de segurança de " + timestamp + "...");
-            int restoredCount = 0;
-            for (int i = 0; i < count; i++)
+            string path = Path.Combine(BackupDir(), Path.GetFileName(fileMatch.Groups[1].Value));
+            if (!File.Exists(path))
             {
-                string regFile = backupFile + "_" + i + ".reg";
-                if (File.Exists(regFile))
-                {
-                    if (RunReg("import \"" + regFile + "\"")) restoredCount++;
-                }
+                Console.WriteLine("⚠️ Arquivo do diário não encontrado: " + path);
+                OfferSystemRestore();
+                return false;
             }
 
-            Console.WriteLine("✅ Configurações originais restauradas com sucesso! (" + restoredCount + "/" + count + " chaves)");
-            return true;
+            string machine = null;
+            List<JournalEntry> entries = new List<JournalEntry>();
+            try
+            {
+                foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    string[] p = line.Split('\t');
+                    if (p.Length == 2 && p[0] == "machine")
+                    {
+                        machine = FromB64(p[1]);
+                    }
+                    else if (p.Length == 6 && p[0] == "entry")
+                    {
+                        JournalEntry e = new JournalEntry();
+                        e.Key = FromB64(p[1]);
+                        e.Name = FromB64(p[2]);
+                        e.Existed = p[3] == "1";
+                        e.Type = p[4];
+                        e.Data = FromB64(p[5]);
+                        entries.Add(e);
+                    }
+                }
+            }
+            catch
+            {
+                Console.WriteLine("⚠️ Diário de alterações corrompido — nada foi restaurado.");
+                OfferSystemRestore();
+                return false;
+            }
+
+            if (machine == null || !string.Equals(machine, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("❌ Este diário foi criado em OUTRO computador (" + (machine ?? "desconhecido") + ") —");
+                Console.WriteLine("   este computador é " + Environment.MachineName + ". Nada foi restaurado, por segurança.");
+                Console.ResetColor();
+                return false;
+            }
+
+            Console.WriteLine("🔄 Desfazendo " + entries.Count + " alterações de " + (tsMatch.Success ? tsMatch.Groups[1].Value : "data desconhecida") + "...");
+            int ok = 0;
+            List<string> failed = new List<string>();
+            for (int i = entries.Count - 1; i >= 0; i--)
+            {
+                JournalEntry e = entries[i];
+                bool r;
+                if (e.Existed)
+                {
+                    r = RunReg("add \"" + e.Key + "\" /v \"" + e.Name + "\" /t " + e.Type + " /d \"" + e.Data + "\" /f");
+                }
+                else
+                {
+                    string t, d;
+                    // Se o valor já não existe mais, o estado original (ausente) já está correto.
+                    r = !QueryRegValue(e.Key, e.Name, out t, out d) || RunReg("delete \"" + e.Key + "\" /v \"" + e.Name + "\" /f");
+                }
+                if (r) ok++; else failed.Add(e.Key + "\\" + e.Name);
+            }
+
+            if (failed.Count == 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("✅ " + ok + "/" + entries.Count + " valores do Registro voltaram ao estado original.");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("⚠️ " + ok + "/" + entries.Count + " valores restaurados. Falharam:");
+                foreach (string f in failed) Console.WriteLine("   - " + f);
+                Console.ResetColor();
+            }
+            Console.WriteLine("ℹ️ Os ajustes de rede feitos via netsh não ficam no diário — só o Ponto de Restauração os desfaz.");
+            OfferSystemRestore();
+            return failed.Count == 0;
         }
 
         // ============================================================
-        // Tweaks — porta fiel de cada arquivo em src/tweaks/*.js (mesmos valores,
-        // mesmas condições de gating). Mantidos separados por categoria, igual ao
-        // lado Node, pra facilitar comparar as duas implementações lado a lado.
+        // Tweaks — toda escrita passa por SetReg (diário + contagem real de sucesso).
         // ============================================================
+        const string MmKey = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile";
+        const string IfeoKey = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options";
+
         static List<string> ApplyCpuSchedulerTweaks(HardwareProfile hw)
         {
             List<string> log = new List<string>();
-            string priorityValue = hw.CpuThreads >= 8 ? "0x26" : "0x28";
-            RunReg("add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\PriorityControl\" /v \"Win32PrioritySeparation\" /t REG_DWORD /d " + priorityValue + " /f");
-            log.Add("• Escalonamento de Threads CPU: Win32PrioritySeparation configurado para " + priorityValue + ".");
 
-            RunReg("add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\" /v \"NetworkThrottlingIndex\" /t REG_DWORD /d 0xFFFFFFFF /f");
-            RunReg("add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\" /v \"SystemResponsiveness\" /t REG_DWORD /d 10 /f");
-            log.Add("• MMCSS: Throttling de rede desativado e Responsividade do Sistema ajustada para 90% realtime / 10% background.");
+            // 0x26 = quantum curto + variável + boost 3:1 pro programa em primeiro plano.
+            // Bug corrigido: antes, máquinas com menos de 8 threads recebiam 0x28 (quantum
+            // FIXO e SEM boost de primeiro plano) — o oposto do prometido, e justamente o
+            // caso de PCs de entrada (ex.: i5 de 4 threads com GTX 1050 Ti).
+            SetReg("HKLM\\SYSTEM\\CurrentControlSet\\Control\\PriorityControl", "Win32PrioritySeparation", "REG_DWORD", "0x26");
+            log.Add("• Escalonamento de CPU: Win32PrioritySeparation = 0x26 (quantum curto e variável, boost 3:1 pro programa em primeiro plano).");
 
-            string gamesPath = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile\\Tasks\\Games";
-            RunReg("add \"" + gamesPath + "\" /v \"GPU Priority\" /t REG_DWORD /d 8 /f");
-            RunReg("add \"" + gamesPath + "\" /v \"Priority\" /t REG_DWORD /d 6 /f");
-            RunReg("add \"" + gamesPath + "\" /v \"Scheduling Category\" /t REG_SZ /d \"High\" /f");
-            RunReg("add \"" + gamesPath + "\" /v \"SFIO Priority\" /t REG_SZ /d \"High\" /f");
-            log.Add("• Perfil MMCSS Games: Prioridade de GPU e Escalonamento elevadas para High.");
+            SetReg(MmKey, "NetworkThrottlingIndex", "REG_DWORD", "0xFFFFFFFF");
+            SetReg(MmKey, "SystemResponsiveness", "REG_DWORD", "10");
+            log.Add("• MMCSS: throttling de rede desativado e responsividade do sistema em 90% realtime / 10% background.");
 
-            RunReg("add \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\csrss.exe\\PerfOptions\" /v \"CpuPriorityClass\" /t REG_DWORD /d 3 /f");
-            log.Add("• Subsistema CSRSS: Otimização de despacho de mensagens de janela para baixa latência.");
+            string gamesPath = MmKey + "\\Tasks\\Games";
+            SetReg(gamesPath, "GPU Priority", "REG_DWORD", "8");
+            SetReg(gamesPath, "Priority", "REG_DWORD", "6");
+            SetReg(gamesPath, "Scheduling Category", "REG_SZ", "High");
+            SetReg(gamesPath, "SFIO Priority", "REG_SZ", "High");
+            log.Add("• Perfil MMCSS Games: prioridade de GPU e escalonamento em High.");
+
+            SetReg(IfeoKey + "\\csrss.exe\\PerfOptions", "CpuPriorityClass", "REG_DWORD", "3");
+            log.Add("• CSRSS: prioridade de despacho de mensagens de janela elevada.");
 
             return log;
         }
@@ -322,20 +554,20 @@ namespace AdaptivePCOptimizer
 
             if (hw.GpuSupportsHAGS && hw.OsBuild >= 19041)
             {
-                RunReg("add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers\" /v \"HwSchMode\" /t REG_DWORD /d 2 /f");
-                log.Add("• HAGS (Hardware Accelerated GPU Scheduling): Ativado para redução de overhead na comunicação CPU-GPU.");
+                SetReg("HKLM\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers", "HwSchMode", "REG_DWORD", "2");
+                log.Add("• HAGS (Agendamento de GPU acelerado por hardware): ativado — vale a partir do próximo reinício.");
             }
 
-            RunReg("add \"HKCU\\Software\\Microsoft\\Direct3D\" /v \"MaxFrameLatency\" /t REG_DWORD /d 1 /f");
-            RunReg("add \"HKLM\\SOFTWARE\\Microsoft\\Direct3D\" /v \"MaxFrameLatency\" /t REG_DWORD /d 1 /f");
-            log.Add("• DirectX Queue: MaxFrameLatency configurado para 1 (Renderização imediata de quadros sem buffer lag).");
+            SetReg("HKCU\\Software\\Microsoft\\Direct3D", "MaxFrameLatency", "REG_DWORD", "1");
+            SetReg("HKLM\\SOFTWARE\\Microsoft\\Direct3D", "MaxFrameLatency", "REG_DWORD", "1");
+            log.Add("• Direct3D: MaxFrameLatency = 1 (fila de quadros mínima).");
 
-            RunReg("add \"HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences\" /v \"DirectXShaderCacheSize\" /t REG_DWORD /d 10240 /f");
-            log.Add("• Shader Cache DirectX: Alocado buffer de até 10GB para cache pré-compilado de shaders.");
+            SetReg("HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences", "DirectXShaderCacheSize", "REG_DWORD", "10240");
+            log.Add("• Cache de shaders DirectX: limite configurado em 10GB.");
 
-            RunReg("add \"HKCU\\Software\\Microsoft\\Windows\\DWM\" /v \"Composition\" /t REG_DWORD /d 1 /f");
-            RunReg("add \"HKCU\\Software\\Microsoft\\Windows\\DWM\" /v \"EnableAeroPeek\" /t REG_DWORD /d 1 /f");
-            log.Add("• DWM Compositor: Sincronização multi-monitor e renderização de janelas otimizada.");
+            SetReg("HKCU\\Software\\Microsoft\\Windows\\DWM", "Composition", "REG_DWORD", "1");
+            SetReg("HKCU\\Software\\Microsoft\\Windows\\DWM", "EnableAeroPeek", "REG_DWORD", "1");
+            log.Add("• DWM: composição de janelas configurada.");
 
             return log;
         }
@@ -344,19 +576,18 @@ namespace AdaptivePCOptimizer
         {
             List<string> log = new List<string>();
 
-            RunReg("add \"HKCU\\Control Panel\\Mouse\" /v \"MouseSpeed\" /t REG_SZ /d \"0\" /f");
-            RunReg("add \"HKCU\\Control Panel\\Mouse\" /v \"MouseThreshold1\" /t REG_SZ /d \"0\" /f");
-            RunReg("add \"HKCU\\Control Panel\\Mouse\" /v \"MouseThreshold2\" /t REG_SZ /d \"0\" /f");
-            RunReg("add \"HKCU\\Control Panel\\Mouse\" /v \"MouseSensitivity\" /t REG_SZ /d \"10\" /f");
-            log.Add("• Mouse Raw Input 1:1: Aceleração de ponteiro desativada e curva 1:1 ativada.");
+            SetReg("HKCU\\Control Panel\\Mouse", "MouseSpeed", "REG_SZ", "0");
+            SetReg("HKCU\\Control Panel\\Mouse", "MouseThreshold1", "REG_SZ", "0");
+            SetReg("HKCU\\Control Panel\\Mouse", "MouseThreshold2", "REG_SZ", "0");
+            SetReg("HKCU\\Control Panel\\Mouse", "MouseSensitivity", "REG_SZ", "10");
+            log.Add("• Mouse 1:1: aceleração de ponteiro (\"Aumentar precisão do ponteiro\") desativada.");
 
-            RunReg("add \"HKCU\\Control Panel\\Keyboard\" /v \"KeyboardDelay\" /t REG_SZ /d \"0\" /f");
-            RunReg("add \"HKCU\\Control Panel\\Keyboard\" /v \"KeyboardSpeed\" /t REG_SZ /d \"31\" /f");
-            log.Add("• Teclado: Delay de repetição reduzido para 0ms e taxa de repetição no máximo (31).");
+            SetReg("HKCU\\Control Panel\\Keyboard", "KeyboardDelay", "REG_SZ", "0");
+            SetReg("HKCU\\Control Panel\\Keyboard", "KeyboardSpeed", "REG_SZ", "31");
+            log.Add("• Teclado: menor atraso antes da repetição e taxa de repetição máxima (31).");
 
-            RunReg("add \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\mouclass\\Parameters\" /v \"MouseDataQueueSize\" /t REG_DWORD /d 100 /f");
-            RunReg("add \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\kbdclass\\Parameters\" /v \"KeyboardDataQueueSize\" /t REG_DWORD /d 100 /f");
-            log.Add("• Fila de Dados HID (USB/PS2): Tamanho de fila ajustado para 100 pacotes.");
+            // Removido: MouseDataQueueSize/KeyboardDataQueueSize = 100 — 100 JÁ é o padrão
+            // do Windows, então o ajuste não mudava nada e o log afirmava um ganho que não existia.
 
             return log;
         }
@@ -365,20 +596,21 @@ namespace AdaptivePCOptimizer
         {
             List<string> log = new List<string>();
 
-            RunReg("add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\" /v \"NtfsMemoryUsage\" /t REG_DWORD /d 2 /f");
-            log.Add("• NTFS Memory Usage: Configurado para nível 2 (leitura mais rápida de milhares de arquivos).");
+            SetReg("HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem", "NtfsMemoryUsage", "REG_DWORD", "2");
+            log.Add("• NTFS: cache de metadados em nível 2 (leitura mais rápida de muitos arquivos).");
 
-            RunReg("add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\" /v \"NtfsDisableLastAccessUpdate\" /t REG_DWORD /d 1 /f");
-            log.Add("• NTFS Last Access: Desativada atualização de carimbo de data ao ler arquivos.");
+            SetReg("HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem", "NtfsDisableLastAccessUpdate", "REG_DWORD", "1");
+            log.Add("• NTFS: desativada a gravação de data de último acesso a cada leitura.");
 
+            string mmKey = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management";
             if (hw.RamTotalGB >= 16)
             {
-                RunReg("add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\" /v \"DisablePagingExecutive\" /t REG_DWORD /d 1 /f");
-                log.Add("• Paging Executive: Drivers do sistema retidos na RAM física (>=16GB detectados).");
+                SetReg(mmKey, "DisablePagingExecutive", "REG_DWORD", "1");
+                log.Add("• Paging Executive: drivers do kernel mantidos na RAM física (16GB+ detectados).");
             }
 
-            RunReg("add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\" /v \"LargeSystemCache\" /t REG_DWORD /d 0 /f");
-            log.Add("• Gerenciamento de Memória: Cache do sistema ajustado para priorizar aplicações/jogos ativos.");
+            SetReg(mmKey, "LargeSystemCache", "REG_DWORD", "0");
+            log.Add("• Memória: cache do sistema priorizando os programas/jogos abertos.");
 
             return log;
         }
@@ -387,11 +619,13 @@ namespace AdaptivePCOptimizer
         {
             List<string> log = new List<string>();
 
+            // netsh não passa pelo diário (não é um valor de Registro simples) — é
+            // revertido pelo Ponto de Restauração do Windows.
             RunSilent("netsh", "int tcp set global autotuninglevel=normal");
             RunSilent("netsh", "int tcp set global rss=enabled");
             RunSilent("netsh", "int tcp set global timestamps=disabled");
             RunSilent("netsh", "int tcp set global ecncapability=disabled");
-            log.Add("• Pilha TCP/IP Netsh: RSS ativado e Auto-Tuning normal.");
+            log.Add("• TCP/IP (netsh): RSS ativado e auto-tuning normal.");
 
             try
             {
@@ -404,12 +638,12 @@ namespace AdaptivePCOptimizer
                     if (trimmed.StartsWith("HKEY_LOCAL_MACHINE"))
                     {
                         string shortKey = "HKLM" + trimmed.Substring("HKEY_LOCAL_MACHINE".Length);
-                        RunReg("add \"" + shortKey + "\" /v \"TcpAckFrequency\" /t REG_DWORD /d 1 /f");
-                        RunReg("add \"" + shortKey + "\" /v \"TCPNoDelay\" /t REG_DWORD /d 1 /f");
-                        RunReg("add \"" + shortKey + "\" /v \"TcpDelAckTicks\" /t REG_DWORD /d 0 /f");
+                        SetReg(shortKey, "TcpAckFrequency", "REG_DWORD", "1");
+                        SetReg(shortKey, "TCPNoDelay", "REG_DWORD", "1");
+                        SetReg(shortKey, "TcpDelAckTicks", "REG_DWORD", "0");
                     }
                 }
-                log.Add("• TCP Low Latency: Algoritmo de Nagle desativado (TcpAckFrequency=1) em todas as interfaces.");
+                log.Add("• TCP baixa latência: algoritmo de Nagle desativado em todas as interfaces de rede.");
             }
             catch { }
 
@@ -420,24 +654,46 @@ namespace AdaptivePCOptimizer
         {
             List<string> log = new List<string>();
 
-            string godotKey = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\Godot_v4.7.2-stable_win64_console.exe\\PerfOptions";
-            RunReg("add \"" + godotKey + "\" /v \"CpuPriorityClass\" /t REG_DWORD /d 3 /f");
-            RunReg("add \"" + godotKey + "\" /v \"IoPriority\" /t REG_DWORD /d 3 /f");
-            log.Add("• Godot Engine: Prioridade de CPU e I/O de alta performance configurada.");
+            string godotKey = IfeoKey + "\\Godot_v4.7.2-stable_win64_console.exe\\PerfOptions";
+            SetReg(godotKey, "CpuPriorityClass", "REG_DWORD", "3");
+            SetReg(godotKey, "IoPriority", "REG_DWORD", "3");
+            log.Add("• Godot Engine: prioridade de CPU e I/O alta (sem efeito se o Godot não estiver instalado).");
 
-            RunReg("add \"HKCU\\System\\GameConfigStore\" /v \"GameDVR_Enabled\" /t REG_DWORD /d 0 /f");
-            RunReg("add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR\" /v \"AllowGameDVR\" /t REG_DWORD /d 0 /f");
-            RunReg("add \"HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\GameDVR\" /v \"AppCaptureEnabled\" /t REG_DWORD /d 0 /f");
-            log.Add("• GameDVR / Captura Passiva: Desativada captura em segundo plano.");
+            SetReg("HKCU\\System\\GameConfigStore", "GameDVR_Enabled", "REG_DWORD", "0");
+            SetReg("HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR", "AllowGameDVR", "REG_DWORD", "0");
+            SetReg("HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\GameDVR", "AppCaptureEnabled", "REG_DWORD", "0");
+            log.Add("• GameDVR: gravação em segundo plano da Xbox Game Bar desativada.");
 
             return log;
         }
 
         static void ApplyAllTweaksNative(HardwareProfile hw)
         {
-            Console.WriteLine("🚀 Iniciando Otimização Adaptativa Segura (motor nativo, sem dependência de Node.js)...\n");
+            Console.WriteLine("🚀 Iniciando Otimização Adaptativa Segura...\n");
 
-            CreateRegistryBackup();
+            if (CreateSystemRestorePoint())
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("✅ Ponto de Restauração criado — dá pra desfazer TUDO pela Restauração do Sistema do Windows.");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("⚠️ Não foi possível criar o Ponto de Restauração do Windows");
+                Console.WriteLine("   (Proteção do Sistema bloqueada por política, ou sem espaço em disco).");
+                Console.WriteLine("   O diário próprio do programa (opção [4]) ainda desfaz os ajustes de Registro,");
+                Console.WriteLine("   mas NÃO os ajustes de rede via netsh.");
+                Console.ResetColor();
+                if (!AskYesNo("   Continuar mesmo assim? (S/N): "))
+                {
+                    Console.WriteLine("\nCancelado — nada foi alterado.");
+                    return;
+                }
+            }
+            Console.WriteLine();
+
+            BeginJournal();
             Console.WriteLine();
 
             List<string> allLogs = new List<string>();
@@ -448,7 +704,7 @@ namespace AdaptivePCOptimizer
             Console.WriteLine("🎮 [2/6] Otimizando Comunicação GPU, DirectX e HAGS...");
             allLogs.AddRange(ApplyGpuDisplayTweaks(hw));
 
-            Console.WriteLine("🖱️  [3/6] Otimizando Periféricos (Mouse Raw 1:1, Teclado 0ms, Fila HID)...");
+            Console.WriteLine("🖱️  [3/6] Otimizando Periféricos (Mouse 1:1, Teclado)...");
             allLogs.AddRange(ApplyInputDevicesTweaks());
 
             Console.WriteLine("💾 [4/6] Otimizando Cache NTFS e Alocação de Memória Física...");
@@ -461,14 +717,23 @@ namespace AdaptivePCOptimizer
             allLogs.AddRange(ApplyDevGamingHybridTweaks());
 
             Console.WriteLine("\n================================================================");
-            Console.WriteLine("             ✅ OTIMIZAÇÃO CONCLUÍDA COM SUCESSO!              ");
+            if (failedWrites.Count == 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine("  ✅ OTIMIZAÇÃO CONCLUÍDA — " + okWrites + " ajustes de Registro aplicados, nenhuma falha.");
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("  ⚠️ OTIMIZAÇÃO PARCIAL — " + okWrites + " ajustes aplicados, " + failedWrites.Count + " falharam:");
+                foreach (string f in failedWrites) Console.WriteLine("     - " + f);
+            }
+            Console.ResetColor();
             Console.WriteLine("================================================================");
             foreach (string item in allLogs) Console.WriteLine(item);
             Console.WriteLine("================================================================");
-            Console.WriteLine("💡 Dica: Para obter 100% do ganho de latência de drivers e kernel,");
-            Console.WriteLine("   reinicie seu computador assim que for conveniente.\n");
+            Console.WriteLine("💡 Reinicie o computador pra todos os ajustes (principalmente HAGS) valerem.\n");
         }
-
         // ============================================================
         // Status — LÊ O VALOR REAL ATUAL DO REGISTRO em vez de afirmar um estado
         // fixo/otimista. Corrige o mesmo bug que existia em benchmark.js (valores
@@ -586,14 +851,13 @@ namespace AdaptivePCOptimizer
             }
             else
             {
-                // Mesma lista de pacotes que driver_installer.js (lado Node) usa — mantidas
-                // as duas implementações em paralelo pra não divergir o que cada uma instala.
+                // Node.js saiu da lista: não é necessário pra quem só joga, e o .exe não
+                // depende mais dele (sempre usa este motor nativo).
                 string[][] packages = new string[][] {
                     new string[] { "Microsoft Visual C++ Redistributable (x64)", "Microsoft.VCRedist.2015+.x64" },
                     new string[] { "Microsoft Visual C++ Redistributable (x86)", "Microsoft.VCRedist.2015+.x86" },
                     new string[] { "DirectX End-User Runtime", "Microsoft.DirectX" },
-                    new string[] { "Microsoft .NET Desktop Runtime 8", "Microsoft.DotNet.DesktopRuntime.8" },
-                    new string[] { "Node.js LTS", "OpenJS.NodeJS.LTS" }
+                    new string[] { "Microsoft .NET Desktop Runtime 8", "Microsoft.DotNet.DesktopRuntime.8" }
                 };
                 int installedCount = 0;
                 foreach (string[] pkg in packages)
@@ -626,44 +890,14 @@ namespace AdaptivePCOptimizer
         }
 
         // ============================================================
-        // Dispatch — usa a implementação Node (mais rica, com detecção completa de
-        // storage/laptop) QUANDO node.exe e index.js estão disponíveis; caso
-        // contrário, usa o motor nativo acima em vez de um fallback quebrado que só
-        // tentava 1 comando de winget e mentia sucesso independente do resultado.
         // ============================================================
-        static bool IsNodeAvailable()
-        {
-            return IsToolAvailable("node");
-        }
-
+        // Dispatch — SEMPRE o motor nativo. Bug corrigido: antes, se Node.js existisse
+        // na máquina (a própria opção [2] instalava), o .exe passava a rodar a engine JS,
+        // que não tinha as correções de segurança deste arquivo. A engine JS continua no
+        // repositório pra uso de desenvolvimento (npm run ...), mas não é mais usada aqui.
+        // ============================================================
         static void RunScript(string args)
         {
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string indexJs = Path.Combine(baseDir, "index.js");
-
-            if (File.Exists(indexJs) && IsNodeAvailable())
-            {
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = "node";
-                psi.Arguments = "\"" + indexJs + "\" " + args;
-                psi.UseShellExecute = false;
-                psi.WorkingDirectory = baseDir;
-
-                try
-                {
-                    using (Process p = Process.Start(psi))
-                    {
-                        p.WaitForExit();
-                    }
-                    return;
-                }
-                catch
-                {
-                    // node existia no PATH mas falhou ao iniciar por outro motivo — cai pro motor nativo abaixo.
-                }
-            }
-
-            Console.WriteLine("[INFO] Node.js não encontrado nesta máquina — usando o motor nativo (100% funcional, sem dependências externas).\n");
             HardwareProfile hw = DetectHardware();
 
             if (args.IndexOf("--apply") >= 0 || args.IndexOf("-a") >= 0 || args.IndexOf("optimize") >= 0)
