@@ -26,6 +26,7 @@ Windows** e um diário de cada valor alterado criados automaticamente antes de q
 │  [2] 🔄 FORMATEI MEU PC AGORA (Instalar Drivers e Runtimes)  │
 │  [3] 📊 VERIFICAR HARDWARE & STATUS DE LATÊNCIA              │
 │  [4] 🛡️ DESFAZER OTIMIZAÇÃO (RESTAURAR VALORES ORIGINAIS)    │
+│  [5] 🔎 VERIFICAR SE HÁ DRIVERS NOVOS (sem instalar)         │
 │  [0] ❌ SAIR                                                  │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -35,8 +36,9 @@ Windows** e um diário de cada valor alterado criados automaticamente antes de q
 Toda ação do programa reporta o resultado **real**, verificado no próprio sistema — nunca uma
 mensagem de sucesso genérica independente do que aconteceu de fato:
 - **[3] Status** lê o valor atual no Registro pra cada ajuste, não uma lista fixa que sempre diz "ativado".
-- **[2] Drivers/Runtimes** confere se cada componente já está instalado (`winget list --exact`)
-  antes de instalar — nunca reinstala por cima do que já existe, zero risco de conflito.
+- **[2] Drivers/Runtimes** compara a versão instalada de cada driver com a melhor versão oficial
+  e só instala o que está desatualizado; confere a versão ativa depois de instalar. Runtimes: checa
+  com `winget list --exact` antes — nunca reinstala por cima do que já existe.
 - Se uma ferramenta necessária (ex.: `winget`) não está disponível na máquina, o programa avisa
   isso explicitamente com instrução de como resolver, em vez de fingir que funcionou.
 - **[1] Otimizar** conta cada escrita de Registro que de fato funcionou e lista as que falharam —
@@ -63,19 +65,32 @@ placa de vídeo, RAM e build do Windows detectados na hora:
 Pensada pra logo depois de uma instalação limpa do Windows:
 
 1. **Varredura PnP**: identifica barramentos/componentes sem driver instalado.
-2. **Driver de GPU**: detecta o fabricante (**NVIDIA**, **AMD** ou **Intel**) e abre a página
-   oficial de download/detecção correta no navegador. A instalação em si é sempre manual, feita
-   pelo usuário na página do próprio fabricante — nenhum driver de GPU é baixado ou instalado
-   às cegas por script (cada fabricante exige aceitar termos próprios, e não existe link de
-   download silencioso oficial e estável pra isso).
-3. **Drivers de chipset, áudio e rede**: abre a tela de Atualizações Opcionais do Windows
-   (Windows Update é o canal oficial e mais seguro pra esses).
-4. **Runtimes essenciais** (Microsoft Visual C++ 2015-2022 x64/x86, DirectX End-User Runtime,
+2. **Drivers — a melhor versão para o hardware, instalada sozinha** (estilo Driver Booster, mas
+   só de fonte oficial). Motor em `src/drivers_engine.ps1`, embutido no `.exe`:
+   - **Placa NVIDIA**: consulta o catálogo oficial da NVIDIA pelo modelo exato e pega o driver
+     **Game Ready WHQL** mais recente **que suporta aquele modelo** — "melhor" não é "mais novo
+     do mundo": uma RTX 3060 recebe o ramo atual (ex.: 617.x), uma GTX 1050 Ti recebe o último
+     ramo que ainda a suporta (ex.: 582.x). Instalação silenciosa, com NVIDIA App/ShadowPlay.
+   - **Chipset AMD** (Ryzen em placas A320…X870E): lê a página oficial da AMD do chipset da
+     placa-mãe e instala o AMD Chipset Software mais recente.
+   - **Todo o resto** (rede, Wi-Fi, Bluetooth, áudio, vídeo integrado, chipset Intel): catálogo
+     de drivers do **Windows Update**, assinados pela Microsoft — sem deixar o Windows Update
+     trocar o driver da NVIDIA por um mais antigo.
+   - **Segurança**: nada é executado sem **assinatura digital válida do fabricante esperado**
+     (NVIDIA Corporation / Advanced Micro Devices); arquivo com assinatura errada é apagado.
+     Só instala o que está desatualizado, e confere a versão ativa depois.
+   - Sem internet ou com o site do fabricante fora do ar: avisa e abre as páginas oficiais.
+3. **Runtimes essenciais** (Microsoft Visual C++ 2015-2022 x64/x86, DirectX End-User Runtime,
    .NET Desktop Runtime 8): instalados silenciosamente via `winget`, **só depois de
    confirmar que cada um ainda não está presente** — zero reinstalação desnecessária, zero
    conflito. Se o `winget` não estiver disponível na máquina (acontece às vezes logo após
    formatar), o programa avisa isso claramente em vez de fingir sucesso, e indica como instalar
    o "App Installer" pela Microsoft Store pra resolver.
+
+## [5] 🔎 Verificar se há drivers novos
+
+Mesmo motor da opção [2] em modo só-leitura: mostra, para cada driver, a versão instalada e a
+melhor versão oficial disponível — sem baixar nem instalar nada.
 
 ## [3] 📊 Verificar Hardware & Status de Latência
 
@@ -129,7 +144,7 @@ C:WindowsMicrosoft.NETFramework644.0.30319csc.exe /nologo /codepage:65001 /opti
    **copie só o `.exe`** — ele cria a própria pasta `backups/` na primeira execução.
 2. Dê 2 cliques nele. O Windows vai pedir permissão de Administrador (UAC) — aceite, é
    necessário pra alterar o Registro e o Windows Update.
-3. Escolha uma opção no menu (`1`–`4`) ou `0` pra sair.
+3. Escolha uma opção no menu (`1`–`5`) ou `0` pra sair.
 
 Também dá pra rodar direto por linha de comando ou script:
 ```
@@ -137,6 +152,7 @@ AdaptivePCOptimizer.exe --apply      (equivalente à opção 1)
 AdaptivePCOptimizer.exe --drivers    (equivalente à opção 2)
 AdaptivePCOptimizer.exe --status     (equivalente à opção 3)
 AdaptivePCOptimizer.exe --restore    (equivalente à opção 4)
+AdaptivePCOptimizer.exe --check-drivers  (equivalente à opção 5)
 ```
 Ou pelos atalhos prontos: [`optimize.bat`](optimize.bat) e [`restore.bat`](restore.bat).
 

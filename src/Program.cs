@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
@@ -813,34 +814,74 @@ if ($null -ne $after -and $after -gt $before) { 'RESTOREPOINT_OK' } else { 'REST
             catch { }
         }
 
+        // Motor de drivers (src/drivers_engine.ps1, embutido no .exe como recurso):
+        // detecta o hardware e instala a MELHOR versao de driver pra ele, so' de
+        // fonte oficial e so' depois de conferir a assinatura digital do fabricante —
+        // NVIDIA (Game Ready WHQL mais recente que suporta aquele modelo), chipset
+        // AMD (pagina oficial do chipset da placa-mae) e o resto pelo catalogo de
+        // drivers do Windows Update. Roda no mesmo console, com saida ao vivo.
+        static bool RunDriverEngine(bool somenteVerificar)
+        {
+            string tmp = Path.Combine(Path.GetTempPath(), "AdaptivePCOptimizer_drivers_engine.ps1");
+            try
+            {
+                using (Stream res = Assembly.GetExecutingAssembly().GetManifestResourceStream("drivers_engine.ps1"))
+                {
+                    if (res == null) { Console.WriteLine("  ⚠️ Motor de drivers ausente neste .exe (compilação sem o recurso)."); return false; }
+                    using (FileStream f = File.Create(tmp)) res.CopyTo(f);
+                }
+                ProcessStartInfo psi = new ProcessStartInfo("powershell.exe",
+                    "-NoProfile -ExecutionPolicy Bypass -File \"" + tmp + "\"" + (somenteVerificar ? " -SomenteVerificar" : ""));
+                psi.UseShellExecute = false;   // herda o console: o usuario acompanha cada passo
+                Process p = Process.Start(psi);
+                p.WaitForExit();
+                return p.ExitCode == 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("  ⚠️ Motor de drivers falhou: " + ex.Message);
+                return false;
+            }
+            finally
+            {
+                try { File.Delete(tmp); } catch { }
+            }
+        }
+
+        static void CheckDriversNative()
+        {
+            Console.WriteLine("\n🔎 VERIFICAR DRIVERS — compara o instalado com a melhor versão oficial (não instala nada)");
+            Console.WriteLine("================================================================");
+            RunDriverEngine(true);
+            Console.WriteLine("\n💡 Para instalar o que estiver desatualizado, use a opção [2].");
+        }
+
         static void InstallDriversAndRuntimesNative(HardwareProfile hw)
         {
             Console.WriteLine("\n🔄 CENTRAL PÓS-FORMATAÇÃO — DRIVERS E RUNTIMES OFICIAIS (motor nativo)");
             Console.WriteLine("================================================================");
 
-            Console.WriteLine("\n🔍 [Passo 1/4] Escaneando barramentos de hardware e dispositivos (PnP)...");
+            Console.WriteLine("\n🔍 [Passo 1/3] Escaneando barramentos de hardware e dispositivos (PnP)...");
             if (RunSilent("pnputil", "/scan-devices"))
                 Console.WriteLine("✅ Barramento PnP atualizado com sucesso.");
             else
                 Console.WriteLine("⚠️ Não foi possível escanear o barramento PnP.");
 
-            Console.WriteLine("\n🎮 [Passo 2/4] Driver de GPU: " + hw.GpuName + " [" + hw.GpuVendor + "]");
-            string vendorPage;
-            if (GpuVendorPages.TryGetValue(hw.GpuVendor, out vendorPage))
+            Console.WriteLine("\n🎮 [Passo 2/3] Drivers: melhor versão oficial para o seu hardware");
+            Console.WriteLine("   (fonte oficial + assinatura digital do fabricante conferida antes de instalar)");
+            if (!RunDriverEngine(false))
             {
-                Console.WriteLine("  🌐 Abrindo a página oficial de drivers " + hw.GpuVendor + " no navegador padrão...");
-                OpenUrl(vendorPage);
-            }
-            else
-            {
-                Console.WriteLine("  ℹ️ Fabricante de GPU não identificado com certeza — acesse o site oficial do fabricante da sua placa de vídeo.");
+                // Sem o motor (ou sem internet): cai no caminho manual de antes.
+                string vendorPage;
+                if (GpuVendorPages.TryGetValue(hw.GpuVendor, out vendorPage))
+                {
+                    Console.WriteLine("  🌐 Abrindo a página oficial de drivers " + hw.GpuVendor + " no navegador...");
+                    OpenUrl(vendorPage);
+                }
+                OpenUrl("ms-settings:windowsupdate-optionalupdates");
             }
 
-            Console.WriteLine("\n🔌 [Passo 3/4] Chipset, áudio, rede e demais periféricos:");
-            Console.WriteLine("  🌐 Abrindo Atualizações Opcionais do Windows (drivers via Windows Update)...");
-            OpenUrl("ms-settings:windowsupdate-optionalupdates");
-
-            Console.WriteLine("\n📦 [Passo 4/4] Runtimes essenciais (Microsoft, via winget quando disponível):");
+            Console.WriteLine("\n📦 [Passo 3/3] Runtimes essenciais (Microsoft, via winget quando disponível):");
             bool wingetOk = IsToolAvailable("winget");
             if (!wingetOk)
             {
@@ -883,9 +924,7 @@ if ($null -ne $after -and $after -gt $before) { 'RESTOREPOINT_OK' } else { 'REST
 
             Console.WriteLine("\n================================================================");
             Console.WriteLine("✅ Central pós-formatação concluída.");
-            Console.WriteLine("   Driver de GPU e drivers de chipset/periféricos foram abertos nas páginas");
-            Console.WriteLine("   oficiais acima — a instalação final desses é manual, por não existir um");
-            Console.WriteLine("   link de download silencioso oficial e estável para eles.");
+            Console.WriteLine("   Se algum driver foi instalado, REINICIE o PC antes de jogar.");
             Console.WriteLine("================================================================\n");
         }
 
@@ -900,21 +939,35 @@ if ($null -ne $after -and $after -gt $before) { 'RESTOREPOINT_OK' } else { 'REST
         {
             HardwareProfile hw = DetectHardware();
 
-            if (args.IndexOf("--apply") >= 0 || args.IndexOf("-a") >= 0 || args.IndexOf("optimize") >= 0)
+            // Compara argumentos INTEIROS. Antes era IndexOf (pedaco de texto): qualquer
+            // argumento contendo "-d" — como "--check-drivers" — disparava a INSTALACAO
+            // de drivers em vez da verificacao.
+            HashSet<string> a = new HashSet<string>(args.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries), StringComparer.OrdinalIgnoreCase);
+            Func<string[], bool> tem = delegate(string[] nomes) { foreach (string n in nomes) if (a.Contains(n)) return true; return false; };
+
+            if (tem(new string[] { "--check-drivers", "verificar-drivers" }))
+            {
+                CheckDriversNative();
+            }
+            else if (tem(new string[] { "--apply", "-a", "optimize" }))
             {
                 ApplyAllTweaksNative(hw);
             }
-            else if (args.IndexOf("--drivers") >= 0 || args.IndexOf("-d") >= 0 || args.IndexOf("format") >= 0)
+            else if (tem(new string[] { "--drivers", "-d", "format" }))
             {
                 InstallDriversAndRuntimesNative(hw);
             }
-            else if (args.IndexOf("--restore") >= 0 || args.IndexOf("-r") >= 0 || args.IndexOf("restore") >= 0)
+            else if (tem(new string[] { "--restore", "-r", "restore" }))
             {
                 RestoreLatestBackupNative();
             }
-            else if (args.IndexOf("--status") >= 0 || args.IndexOf("-s") >= 0 || args.IndexOf("status") >= 0)
+            else if (tem(new string[] { "--status", "-s", "status" }))
             {
                 ShowStatusNative(hw);
+            }
+            else
+            {
+                Console.WriteLine("Argumento desconhecido: " + args + "  (use --apply, --drivers, --check-drivers, --status ou --restore)");
             }
         }
 
@@ -961,11 +1014,12 @@ if ($null -ne $after -and $after -gt $before) { 'RESTOREPOINT_OK' } else { 'REST
                 Console.WriteLine("│  [2] 🔄 FORMATEI MEU PC AGORA (Instalar Drivers e Runtimes)  │");
                 Console.WriteLine("│  [3] 📊 VERIFICAR HARDWARE & STATUS DE LATÊNCIA              │");
                 Console.WriteLine("│  [4] 🛡️ RESTAURAR BACKUP ORIGINAL DO REGISTRO                │");
+                Console.WriteLine("│  [5] 🔎 VERIFICAR SE HÁ DRIVERS NOVOS (sem instalar)         │");
                 Console.WriteLine("│  [0] ❌ SAIR                                                  │");
                 Console.WriteLine("└──────────────────────────────────────────────────────────────┘");
                 Console.ResetColor();
                 Console.WriteLine();
-                Console.Write("Escolha uma opção [0-4]: ");
+                Console.Write("Escolha uma opção [0-5]: ");
 
                 ConsoleKeyInfo key = Console.ReadKey(true);
                 Console.WriteLine(key.KeyChar);
@@ -990,6 +1044,11 @@ if ($null -ne $after -and $after -gt $before) { 'RESTOREPOINT_OK' } else { 'REST
                         break;
                     case '4':
                         RunScript("--restore");
+                        Console.WriteLine("\nPressione qualquer tecla para voltar ao menu...");
+                        Console.ReadKey();
+                        break;
+                    case '5':
+                        RunScript("--check-drivers");
                         Console.WriteLine("\nPressione qualquer tecla para voltar ao menu...");
                         Console.ReadKey();
                         break;
