@@ -132,9 +132,10 @@ por valor — a restauração dela é parcial. Pra uso real, use o `.exe`.
 ### Compilar o .exe
 
 ```
-C:WindowsMicrosoft.NETFramework644.0.30319csc.exe /nologo /codepage:65001 /optimize+ /target:exe /out:AdaptivePCOptimizer.exe srcProgram.cs
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /codepage:65001 /optimize+ /target:exe "/resource:src\drivers_engine.ps1,drivers_engine.ps1" /out:AdaptivePCOptimizer.exe src\Program.cs
 ```
-(`/codepage:65001` é obrigatório: o fonte é UTF-8 sem BOM.)
+(`/codepage:65001` é obrigatório: o fonte é UTF-8 sem BOM. O `/resource` embute o motor de
+drivers — sem ele, a opção [2] volta ao modo manual de abrir as páginas oficiais.)
 
 ---
 
