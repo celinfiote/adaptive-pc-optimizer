@@ -132,10 +132,19 @@ por valor — a restauração dela é parcial. Pra uso real, use o `.exe`.
 ### Compilar o .exe
 
 ```
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /codepage:65001 /optimize+ /target:exe "/resource:src\drivers_engine.ps1,drivers_engine.ps1" /out:AdaptivePCOptimizer.exe src\Program.cs
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /codepage:65001 /optimize+ /target:exe "/resource:src\drivers_engine.ps1,drivers_engine.ps1" /out:AdaptivePCOptimizer.exe src\Program.cs src\AssemblyInfo.cs
 ```
 (`/codepage:65001` é obrigatório: o fonte é UTF-8 sem BOM. O `/resource` embute o motor de
-drivers — sem ele, a opção [2] volta ao modo manual de abrir as páginas oficiais.)
+drivers — sem ele, a opção [2] volta ao modo manual de abrir as páginas oficiais.
+`src\AssemblyInfo.cs` é obrigatório também: sem ele o `.exe` sai com `FileVersion 0.0.0.0` e
+sem Produto/Empresa, e o prompt do UAC passa a dizer **"Editor: Desconhecido"** — o que parece
+malware pra quem recebe o programa de outra pessoa.)
+
+> ⚠️ O `.exe` **não é assinado digitalmente** (assinatura exige certificado pago). Na primeira
+> execução em outro PC, o SmartScreen mostra "O Windows protegeu seu PC" — é preciso clicar em
+> **Mais informações → Executar assim mesmo**. Antivírus mais agressivos podem pedir liberação
+> manual: um executável pequeno, não assinado, que pede Administrador e escreve no Registro é
+> exatamente o perfil que a heurística deles marca.
 
 ---
 
